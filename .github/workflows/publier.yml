@@ -92,3 +92,18 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  controle:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier que l'app peut lire les fichiers
+        run: |
+          B=https://mrjacquesbrunet-del.github.io/rhema-international
+          sleep 30
+          for l in en pt; do
+            N=$(curl -fsSL "$B/audio/$l/index.json" | jq length)
+            echo "Audios $l : $N"
+            F=$(curl -fsSL "$B/audio/$l/index.json" | jq -r '.[0]')
+            curl -fsSI -H "Origin: https://localhost" "$B/audio/$l/$F" | grep -iE "^HTTP|content-type|access-control-allow-origin"
+          done
