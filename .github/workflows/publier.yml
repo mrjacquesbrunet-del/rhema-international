@@ -1,0 +1,94 @@
+name: Publier le site international
+
+# Site « rhema-international » : audios anglais/portugais et commentaires +
+# lexique traduits de l'app RHEMA. Ces fichiers sont produits dans le dépôt
+# jackbrunet (public/audio/en, public/audio/pt, i18n/etude) ; ce site les
+# publie à part pour que jackbrunet.com reste sous la limite de 1 Go de
+# GitHub Pages. Vérifie toutes les heures s'ils ont changé.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  SOURCE: mrjacquesbrunet-del/jackbrunet
+  BRANCHE: claude/great-hamilton-ieokug
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publier: ${{ steps.v.outputs.publier }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dernier() {
+            gh api "repos/$SOURCE/commits?sha=$BRANCHE&path=$1&per_page=1" --jq '.[0].sha // ""'
+          }
+          VERSION="$(dernier public/audio/en)-$(dernier public/audio/pt)-$(dernier i18n/etude)"
+          EN_LIGNE=$(curl -fsSL "https://mrjacquesbrunet-del.github.io/rhema-international/version.txt" 2>/dev/null || true)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$VERSION" != "$EN_LIGNE" ]; then
+            echo "publier=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "Rien de nouveau ($VERSION)."
+          fi
+
+  build:
+    needs: verifier
+    if: needs.verifier.outputs.publier == '1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer les fichiers traduits
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE }}
+          ref: ${{ env.BRANCHE }}
+          path: source
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            public/audio/en
+            public/audio/pt
+            i18n/etude
+          sparse-checkout-cone-mode: true
+
+      - name: Préparer le site
+        run: |
+          mkdir -p site/audio site/etude
+          for l in en pt; do
+            [ -d source/public/audio/$l ] && cp -r source/public/audio/$l site/audio/
+            [ -d source/i18n/etude/$l ] && cp -r source/i18n/etude/$l site/etude/
+          done
+          echo "${{ needs.verifier.outputs.version }}" > site/version.txt
+          printf '<!doctype html><meta charset="utf-8"><title>RHEMA</title><p>RHEMA — fichiers de l’application.</p>' > site/index.html
+          touch site/.nojekyll
+          du -sh site site/* || true
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
